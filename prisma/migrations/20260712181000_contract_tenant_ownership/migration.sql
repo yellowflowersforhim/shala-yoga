@@ -1,0 +1,18 @@
+ALTER TABLE "Program" ALTER COLUMN "tenantId" SET NOT NULL;
+ALTER TABLE "Cohort" ALTER COLUMN "tenantId" SET NOT NULL;
+ALTER TABLE "Enrollment" ALTER COLUMN "tenantId" SET NOT NULL;
+ALTER TABLE "Order" ALTER COLUMN "tenantId" SET NOT NULL;
+ALTER TABLE "Coupon" ALTER COLUMN "tenantId" SET NOT NULL;
+ALTER TABLE "NewsletterSubscriber" ALTER COLUMN "tenantId" SET NOT NULL;
+ALTER TABLE "EmailCampaign" ALTER COLUMN "tenantId" SET NOT NULL;
+ALTER TABLE "Feedback" ALTER COLUMN "tenantId" SET NOT NULL;
+ALTER TABLE "AdminNote" ALTER COLUMN "tenantId" SET NOT NULL;
+ALTER TABLE "ConversionEvent" ALTER COLUMN "tenantId" SET NOT NULL;
+ALTER TABLE "Notification" ALTER COLUMN "tenantId" SET NOT NULL;
+ALTER TABLE "WeeklySession" ALTER COLUMN "tenantId" SET NOT NULL;
+ALTER TABLE "Program" DROP CONSTRAINT IF EXISTS "Program_slug_key";
+ALTER TABLE "Coupon" DROP CONSTRAINT IF EXISTS "Coupon_code_key";
+ALTER TABLE "NewsletterSubscriber" DROP CONSTRAINT IF EXISTS "NewsletterSubscriber_email_key";
+ALTER TABLE "Program" ADD CONSTRAINT "Program_tenantId_slug_key" UNIQUE ("tenantId", "slug");
+ALTER TABLE "Coupon" ADD CONSTRAINT "Coupon_tenantId_code_key" UNIQUE ("tenantId", "code");
+ALTER TABLE "NewsletterSubscriber" ADD CONSTRAINT "NewsletterSubscriber_tenantId_email_key" UNIQUE ("tenantId", "email");

@@ -1,0 +1,633 @@
+generator client {
+    provider = "prisma-client-js"
+}
+
+datasource db {
+    provider = "postgresql"
+    url      = env("DATABASE_URL")
+}
+
+// NextAuth.js Models
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  password      String?
+  image         String?
+  isAdmin       Boolean   @default(false) // Legacy: replaced by TenantMembership + PlatformRole
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts          Account[]
+  sessions          Session[]
+  orders            Order[]
+  enrollments       Enrollment[]
+  notesAboutMe      AdminNote[]       @relation("StudentNotes")
+  notesCreated      AdminNote[]       @relation("AdminCreatedNotes")
+  conversionEvents  ConversionEvent[]
+  notifications     Notification[]
+  emailCampaigns    EmailCampaign[]
+  feedback          Feedback[]
+  memberships       TenantMembership[]
+  auditLogs         AuditLog[]        @relation("AuditActor")
+  platformMembership PlatformMembership?
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Shala multi-tenant core
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum TenantStatus {
+  onboarding
+  active
+  suspended
+  archived
+}
+
+model Tenant {
+  id              String       @id @default(cuid())
+  slug            String       @unique
+  name            String
+  status          TenantStatus @default(onboarding)
+  defaultLocale   String       @default("es")
+  timezone        String       @default("Europe/Madrid")
+  currency        String       @default("EUR")
+  stripeAccountId String?      // Stripe Connect connected account ID
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  domains               Domain[]
+  memberships           TenantMembership[]
+  auditLogs             AuditLog[]
+  programs              Program[]
+  cohorts               Cohort[]
+  enrollments           Enrollment[]
+  orders                Order[]
+  coupons               Coupon[]
+  newsletterSubscribers NewsletterSubscriber[]
+  emailCampaigns        EmailCampaign[]
+  feedback              Feedback[]
+  adminNotes            AdminNote[]
+  conversionEvents      ConversionEvent[]
+  notifications         Notification[]
+  weeklySessions        WeeklySession[]
+  teacherProfile        TeacherProfile?
+  brandTheme            BrandTheme?
+  siteSettings          SiteSettings?
+  pages                 Page[]
+  mediaAssets           MediaAsset[]
+}
+
+enum DomainType {
+  platform_subdomain
+  custom
+}
+
+enum DomainStatus {
+  pending
+  verified
+  failed
+  disabled
+}
+
+model Domain {
+  id          String       @id @default(cuid())
+  tenantId    String
+  hostname    String       @unique
+  type        DomainType   @default(platform_subdomain)
+  status      DomainStatus @default(pending)
+  isCanonical Boolean      @default(false)
+  verifiedAt  DateTime?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([hostname, status])
+}
+
+enum MembershipRole {
+  OWNER
+  ADMIN
+  EDITOR
+  INSTRUCTOR
+  SUPPORT
+  VIEWER
+}
+
+enum MembershipStatus {
+  invited
+  active
+  suspended
+}
+
+model TenantMembership {
+  id         String           @id @default(cuid())
+  tenantId   String
+  userId     String
+  role       MembershipRole   @default(VIEWER)
+  status     MembershipStatus @default(active)
+  invitedAt  DateTime?
+  acceptedAt DateTime?
+  invitedBy  String?
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  tenant     Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@index([userId])
+  @@index([tenantId, role])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  tenantId      String? // DB NOT NULL via 20260712181000
+  actorId    String
+  action     String
+  targetType String
+  targetId   String
+  metadata   Json?
+  requestId  String?
+  createdAt  DateTime @default(now())
+
+  tenant     Tenant?  @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  actor      User     @relation("AuditActor", fields: [actorId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([targetType, targetId])
+}
+
+enum PlatformRole {
+  SUPER_ADMIN
+  SUPPORT
+}
+
+model PlatformMembership {
+  id        String       @id @default(cuid())
+  userId    String
+  role      PlatformRole
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Yoga Booking System Models (now tenant-owned)
+// ═══════════════════════════════════════════════════════════════════════════
+
+model PaymentWebhookEvent {
+  id              String   @id @default(cuid())
+  stripeEventId   String   @unique
+  eventType       String
+  processedAt     DateTime @default(now())
+  orderId         String?
+
+  @@index([stripeEventId])
+  @@index([processedAt])
+}
+
+model Program {
+  id            String    @id @default(cuid())
+  tenantId      String? // DB NOT NULL via 20260712181000
+  slug          String
+  title         String
+  description   String    @db.Text
+  durationWeeks Int
+  priceCents    Int
+  currency      String    @default("EUR")
+  imageUrl      String?
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  tenant        Tenant?   @relation(fields: [tenantId], references: [id])
+  cohorts       Cohort[]
+
+  @@unique([slug]) // DB: @@unique([tenantId, slug]) via 20260712181000
+  @@index([tenantId])
+}
+
+model Cohort {
+  id                 String    @id @default(cuid())
+  tenantId      String? // DB NOT NULL via 20260712181000
+  programId          String
+  name               String
+  startDate          DateTime
+  endDate            DateTime
+  maxSeats           Int
+  scheduleText       String    @db.Text
+  location           String
+  language           String    @default("es")
+  isPublished        Boolean   @default(false)
+  enrollmentOpensAt  DateTime?
+  enrollmentClosesAt DateTime?
+  reminderSent       Boolean   @default(false)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  tenant             Tenant?   @relation(fields: [tenantId], references: [id])
+  program            Program   @relation(fields: [programId], references: [id], onDelete: Cascade)
+  orders             Order[]
+  enrollments        Enrollment[]
+  conversionEvents   ConversionEvent[]
+  feedback           Feedback[]
+
+  @@index([tenantId])
+}
+
+model Enrollment {
+  id         String    @id @default(cuid())
+  tenantId      String? // DB NOT NULL via 20260712181000
+  userId     String?
+  cohortId   String
+  orderId    String
+  status     String    @default("active")
+
+  guestName  String?
+  guestEmail String?
+
+  enrolledAt DateTime  @default(now())
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  tenant     Tenant?   @relation(fields: [tenantId], references: [id])
+  user       User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cohort     Cohort    @relation(fields: [cohortId], references: [id], onDelete: Cascade)
+  order      Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  feedback   Feedback[]
+
+  @@unique([orderId])
+  @@index([tenantId])
+  @@index([cohortId, status])
+  @@index([userId, status])
+}
+
+model Coupon {
+  id               String    @id @default(cuid())
+  tenantId      String? // DB NOT NULL via 20260712181000
+  code             String
+  description      String?
+  discountType     String
+  discountValue    Int
+  maxUses          Int?
+  usedCount        Int       @default(0)
+  validFrom        DateTime?
+  validUntil       DateTime?
+  isActive         Boolean   @default(true)
+  minPurchaseCents Int?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  tenant           Tenant?   @relation(fields: [tenantId], references: [id])
+  orders           Order[]
+
+  @@unique([code]) // DB: @@unique([tenantId, code]) via 20260712181000
+  @@index([tenantId])
+}
+
+model Order {
+  id                    String    @id @default(cuid())
+  tenantId      String? // DB NOT NULL via 20260712181000
+  userId                String?
+  cohortId              String
+  orderNumber           String    @unique
+  status                String    @default("pending")
+  subtotalCents         Int
+  discountCents         Int       @default(0)
+  totalCents            Int
+  currency              String    @default("EUR")
+  stripeCheckoutId      String?   @unique
+  stripePaymentIntentId String?   @unique
+  paidAt                DateTime?
+
+  couponId              String?
+  couponCode            String?
+
+  guestName             String?
+  guestEmail            String?
+  guestPhone            String?
+
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  tenant                Tenant?   @relation(fields: [tenantId], references: [id])
+  user                  User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cohort                Cohort    @relation(fields: [cohortId], references: [id], onDelete: Cascade)
+  coupon                Coupon?   @relation(fields: [couponId], references: [id], onDelete: SetNull)
+  enrollments           Enrollment[]
+
+  @@index([tenantId])
+  @@index([cohortId, status])
+  @@index([guestEmail])
+}
+
+model NewsletterSubscriber {
+  id             String    @id @default(cuid())
+  tenantId      String? // DB NOT NULL via 20260712181000
+  email          String
+  name           String?
+  isActive       Boolean   @default(true)
+  subscribedAt   DateTime  @default(now())
+  unsubscribedAt DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  tenant         Tenant?   @relation(fields: [tenantId], references: [id])
+
+  @@unique([email]) // DB: @@unique([tenantId, email]) via 20260712181000
+  @@index([tenantId])
+}
+
+model WeeklySession {
+  id                 String    @id @default(cuid())
+  tenantId      String? // DB NOT NULL via 20260712181000
+  sessionType        String    @default("online")
+  dayOfWeek          String?
+  time               String?
+  durationHours      Int       @default(1)
+  formUrl            String?
+  presentialDate     DateTime?
+  presentialLocation String?
+  presentialUrl      String?
+  isActive           Boolean   @default(true)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  tenant             Tenant?   @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+}
+
+model AdminNote {
+  id         String    @id @default(cuid())
+  tenantId      String? // DB NOT NULL via 20260712181000
+  userId     String
+  adminId    String
+  category   String    @default("general")
+  content    String    @db.Text
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  tenant     Tenant?   @relation(fields: [tenantId], references: [id])
+  user       User      @relation("StudentNotes", fields: [userId], references: [id], onDelete: Cascade)
+  admin      User      @relation("AdminCreatedNotes", fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+model ConversionEvent {
+  id          String    @id @default(cuid())
+  tenantId      String? // DB NOT NULL via 20260712181000
+  sessionId   String
+  userId      String?
+  cohortId    String?
+  eventType   String
+  eventData   String?   @db.Text
+  timestamp   DateTime  @default(now())
+  userAgent   String?   @db.Text
+  ipAddress   String?
+  createdAt   DateTime  @default(now())
+
+  tenant      Tenant?   @relation(fields: [tenantId], references: [id])
+  user        User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  cohort      Cohort?   @relation(fields: [cohortId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([sessionId])
+  @@index([eventType])
+  @@index([timestamp])
+}
+
+model Notification {
+  id          String    @id @default(cuid())
+  tenantId      String? // DB NOT NULL via 20260712181000
+  userId      String
+  type        String
+  title       String
+  message     String    @db.Text
+  link        String?
+  isRead      Boolean   @default(false)
+  readAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  tenant      Tenant?   @relation(fields: [tenantId], references: [id])
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([userId, isRead])
+  @@index([createdAt])
+}
+
+model EmailCampaign {
+  id            String    @id @default(cuid())
+  tenantId      String? // DB NOT NULL via 20260712181000
+  adminId       String
+  name          String
+  subject       String
+  content       String    @db.Text
+  recipientType String
+  recipientIds  String?   @db.Text
+  status        String    @default("draft")
+  sentCount     Int       @default(0)
+  failedCount   Int       @default(0)
+  sentAt        DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  tenant        Tenant?   @relation(fields: [tenantId], references: [id])
+  admin         User      @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+model Feedback {
+  id           String    @id @default(cuid())
+  tenantId      String? // DB NOT NULL via 20260712181000
+  userId       String?
+  cohortId     String?
+  enrollmentId String?
+  name         String
+  email        String
+  rating       Int
+  category     String    @default("general")
+  message      String    @db.Text
+  isPublic     Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  tenant       Tenant?     @relation(fields: [tenantId], references: [id])
+  user         User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  cohort       Cohort?     @relation(fields: [cohortId], references: [id], onDelete: SetNull)
+  enrollment   Enrollment? @relation(fields: [enrollmentId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([rating])
+  @@index([createdAt])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase 3: Brand and website configuration
+// ═══════════════════════════════════════════════════════════════════════════
+
+model TeacherProfile {
+  id            String   @id @default(cuid())
+  tenantId      String   @unique
+  displayName   String
+  title         String?
+  bio           String?  @db.Text
+  qualifications String? @db.Text
+  languages     String[] @default([])
+  portraitUrl   String?
+  location      String?
+  contactEmail  String?
+  contactPhone  String?
+  whatsappNumber String?
+  socialLinks   Json?    // { instagram, facebook, youtube, website }
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model BrandTheme {
+  id            String   @id @default(cuid())
+  tenantId      String   @unique
+  logoUrl       String?
+  faviconUrl    String?
+  primaryColor  String   @default("#0f766e")  // Neutral teal default
+  secondaryColor String  @default("#14b8a6")
+  accentColor   String   @default("#f59e0b")
+  headingFont   String   @default("inter")
+  bodyFont      String   @default("inter")
+  borderRadius  String   @default("md")
+  buttonStyle   String   @default("rounded")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model SiteSettings {
+  id               String   @id @default(cuid())
+  tenantId         String   @unique
+  siteTitle        String
+  siteDescription  String?
+  heroHeadline     String?
+  heroSubheadline  String?
+  primaryCtaText   String?
+  primaryCtaUrl    String?
+  isPublished      Boolean  @default(false)
+  analyticsId      String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+enum PageType {
+  home
+  about
+  programs
+  intensivos
+  metodologia
+  faq
+  testimonios
+  contact
+  blog
+  custom
+}
+
+model Page {
+  id         String   @id @default(cuid())
+  tenantId   String
+  routeKey   String   // URL path segment: "home", "about", "metodologia"
+  pageType   PageType @default(custom)
+  title      String
+  isPublished Boolean @default(false)
+  seoTitle   String?
+  seoDescription String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  revisions  PageRevision[]
+
+  @@unique([tenantId, routeKey])
+  @@index([tenantId])
+}
+
+model PageRevision {
+  id             String    @id @default(cuid())
+  pageId         String
+  sections       Json      // Array of typed sections: [{ type, order, content, variant }]
+  status         String    @default("draft") // draft, published
+  publishedAt    DateTime?
+  createdBy      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  page           Page      @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@index([pageId, status])
+}
+
+model MediaAsset {
+  id            String   @id @default(cuid())
+  tenantId      String? // DB NOT NULL via 20260712181000
+  objectKey     String   @unique  // tenant-prefixed: "t_slug/uploads/filename"
+  originalName  String
+  contentType   String
+  sizeBytes     Int
+  width         Int?
+  height        Int?
+  altText       String?
+  uploadedBy    String?
+  createdAt     DateTime @default(now())
+
+  tenant        Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
